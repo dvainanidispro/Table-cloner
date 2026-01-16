@@ -1,0 +1,5 @@
+/lib
+logs/
+/temp
+*.log
+env*.json
