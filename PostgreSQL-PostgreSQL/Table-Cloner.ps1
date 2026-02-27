@@ -413,4 +413,7 @@ finally {
     }
 }
 
+# Αναμονή 3 δευτερολέπτων πριν κλείσει το παράθυρο
+Start-Sleep -Seconds 3
+
 #endregion
