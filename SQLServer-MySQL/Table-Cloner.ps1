@@ -184,6 +184,10 @@ function Copy-TableData {
     )
     
     try {
+        if ($BatchSize -le 0) {
+            throw "BatchSize must be an integer greater than 0. Current value: $BatchSize"
+        }
+
         # Διάβασμα δεδομένων από source (SQL Server)
         # Το SourceTable μπορεί να είναι σε μορφή [schema].[table] ή [db].[schema].[table]
         Write-Log "Reading data from '$SourceTable'..."
@@ -198,8 +202,7 @@ function Copy-TableData {
             return $true
         }
         
-        # Δημιουργία INSERT statement template
-        # Δημιουργία λίστας με τα ονόματα των στηλών  
+        # Δημιουργία λίστας με τα ονόματα των στηλών
         $columns = @()
         foreach ($column in $sourceData.Columns) {
             $columns += $column.ColumnName
@@ -207,55 +210,54 @@ function Copy-TableData {
         
         # MySQL destination: χρήση backtick quoting
         $columnList = ($columns | ForEach-Object { "``$_``" }) -join ", "
-        $valuePlaceholders = ($columns | ForEach-Object { "@$_" }) -join ", "
+        $colCount = $columns.Count
         
-        $insertTemplate = "INSERT INTO ``$DestTable`` ($columnList) VALUES ($valuePlaceholders)"
-        
-        # Αντιγραφή δεδομένων σε batches
+        # Αντιγραφή δεδομένων σε batches — ένα multi-row INSERT ανά batch
         $copiedRows = 0
         for ($i = 0; $i -lt $totalRows; $i += $BatchSize) {
             $batchEnd = [Math]::Min($i + $BatchSize, $totalRows)
-            $batchSize = $batchEnd - $i
+            $batchCount = $batchEnd - $i
             
             Write-Log "Copying rows $($i+1) to $batchEnd..."
             
-            # Δημιουργία transaction για το batch
             $transaction = $DestConnection.BeginTransaction()
             
             try {
+                $command = $DestConnection.CreateCommand()
+                $command.Transaction = $transaction
+                $command.CommandTimeout = $Timeout
+                
+                # Χτίζουμε ένα INSERT ... VALUES (row0), (row1), ... για όλο το batch
+                $valueTuples = [System.Collections.Generic.List[string]]::new()
+                
                 for ($j = $i; $j -lt $batchEnd; $j++) {
+                    $rowIndex = $j - $i
                     $row = $sourceData.Rows[$j]
                     
-                    $command = $DestConnection.CreateCommand()
-                    $command.CommandText = $insertTemplate
-                    $command.Transaction = $transaction
-                    $command.CommandTimeout = $Timeout
-                    
-                    # Προσθήκη parameters
-                    for ($k = 0; $k -lt $columns.Count; $k++) {
-                        $columnName = $columns[$k]
-                        $value = $row[$columnName]
+                    $placeholders = [System.Collections.Generic.List[string]]::new()
+                    for ($k = 0; $k -lt $colCount; $k++) {
+                        $paramName = "@p${k}_${rowIndex}"
+                        [void]$placeholders.Add($paramName)
                         
-                        # Χειρισμός null και empty values
+                        $value = $row[$columns[$k]]
                         if ([DBNull]::Value.Equals($value) -or $null -eq $value) {
                             $value = [DBNull]::Value
                         }
-                        elseif ($value -is [string] -and [string]::IsNullOrEmpty($value)) {
-                            # Κενά strings μένουν κενά, δεν γίνονται null
-                            $value = ""
-                        }
                         
                         $param = $command.CreateParameter()
-                        $param.ParameterName = "@$columnName"
+                        $param.ParameterName = $paramName
                         $param.Value = $value
                         [void]$command.Parameters.Add($param)
                     }
                     
-                    [void]$command.ExecuteNonQuery()
+                    [void]$valueTuples.Add("($($placeholders -join ', '))")
                 }
                 
+                $command.CommandText = "INSERT INTO ``$DestTable`` ($columnList) VALUES $($valueTuples -join ', ')"
+                [void]$command.ExecuteNonQuery()
+                
                 $transaction.Commit()
-                $copiedRows += $batchSize
+                $copiedRows += $batchCount
             }
             catch {
                 $transaction.Rollback()
