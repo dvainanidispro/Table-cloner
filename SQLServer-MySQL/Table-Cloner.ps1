@@ -420,7 +420,21 @@ try {
         $destTable = $mapping.to
         
         Write-Log "`n--- Processing: $sourceTable -> $destTable ---"
-        
+
+        # Preflight check: έλεγχος πρόσβασης στον πίνακα προέλευσης πριν αγγίξουμε τον προορισμό
+        Write-Log "Preflight check: verifying read access on '$sourceTable'..."
+        try {
+            $preflightQuery = "SET NOCOUNT ON; SELECT TOP 1 1 AS preflight_check FROM $sourceTable"
+            Invoke-DatabaseQuery -Connection $sourceConn -Query $preflightQuery -Timeout $config.Settings.TimeoutSeconds | Out-Null
+            Write-Log "Preflight check passed" -Level SUCCESS
+        }
+        catch {
+            Write-Log "Preflight check FAILED for '$sourceTable': $($_.Exception.Message)" -Level ERROR
+            Write-Log "Skipping '$sourceTable' -> '$destTable' (destination untouched)" -Level WARNING
+            $failCount++
+            continue
+        }
+
         try {
             # Truncate αν ζητείται
             if ($config.Settings.TruncateBeforeInsert) {
