@@ -122,11 +122,12 @@ SQLServer-MySQL/
 #### DatabaseFrom (SQL Server)
 - `type`: Πάντα `"sqlserver"`
 - `host`: Hostname, IP, ή instance name του SQL Server. Παραδείγματα:
-    - `"sqlserver-host.example.local"` — hostname
+  - `"db-1"` — απλό hostname
+  - `"sqlserver-host.example.local"` — hostname
   - `"localhost"` — τοπικός default instance
   - `".\\SQLEXPRESS"` — τοπικός named instance (σημ: `\\` γιατί είναι JSON escape)
-    - `"sqlserver-host.internal"` — εσωτερικό DNS hostname
-- `port`: Port του SQL Server (default: `1433`). **Αγνοείται αν το host περιέχει `\`** (named instance)
+  - `"sqlserver-host.internal"` — εσωτερικό DNS hostname
+- `port`: Port του SQL Server (default: `1433`). **Αγνοείται αν το host περιέχει `\`** (named instance). Προεραιτικό. Προτείνεται να παραμείνει κενό αν δεν χρησιμοποιείται κάποια ειδική ρύθμιση.
 - `username`: Username για SQL Server Authentication. **Κενό `""` = Windows Authentication**
 - `password`: Password για SQL Server Authentication. **Κενό `""` = Windows Authentication**
 - `database`: Όνομα της βάσης δεδομένων (π.χ. `"source_database"`)
@@ -151,7 +152,7 @@ SQLServer-MySQL/
   | Μεγάλοι πίνακες (20+ columns ή TEXT/BLOB) | 500-1000 |
   | Πολύ μεγάλα δεδομένα (JSON, binary) | 100-500 |
   
-  **Γενικά ασφαλές**: 1000-2000 για τα περισσότερα σενάρια (default: 1000)
+**Γενικά ασφαλές**: 1000-2000 για τα περισσότερα σενάρια (default: 1000). Στο log εμφανίζεται επίσης heuristic εκτίμηση για το current batch size και ένα προτεινόμενο εύρος τιμών, με βάση το συνολικό estimated data size και το μέσο μέγεθος γραμμής.
 
 - `TimeoutSeconds`: Χρονικό όριο για κάθε query σε δευτερόλεπτα (default: 300)
 - `LogFile`: Φάκελος για αποθήκευση των log files (default: `.\logs`)
@@ -209,6 +210,7 @@ table-cloner_YYYYMMDD_HHMMSS.log
 - Timestamp για κάθε ενέργεια
 - Level (INFO, SUCCESS, WARNING, ERROR)
 - Λεπτομερή αναφορά για κάθε πίνακα
+- Estimated data size, average row size, current batch payload και προτεινόμενο εύρος `BatchSize` (heuristic)
 - Authentication mode (Windows Auth ή SQL Server Auth)
 - Σύνοψη με επιτυχίες/αποτυχίες
 - Stack trace σε περίπτωση critical errors
@@ -250,6 +252,7 @@ table-cloner_YYYYMMDD_HHMMSS.log
 - Το `BatchSize: 1000` είναι καλή αφετηρία
 - Για πολύ μεγάλους πίνακες (>1M rows), δοκίμασε `BatchSize: 5000-10000`
 - Για πίνακες με πολλές στήλες ή μεγάλα data types, μείωσε το BatchSize
+- Χρησιμοποίησε και το log output (`Current batch size` / `Recommended batch size`) για να κάνεις fine-tuning ανά πίνακα
 
 ## Troubleshooting
 

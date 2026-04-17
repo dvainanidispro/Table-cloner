@@ -9,6 +9,7 @@ PowerShell script για αντιγραφή δεδομένων από πίνακ
 - ✅ Batch processing για μεγάλους πίνακες
 - ✅ Transaction support για ασφαλή αντιγραφή
 - ✅ Truncate πίνακα προορισμού πριν την αντιγραφή (προαιρετικό)
+- ✅ Preflight έλεγχος πρόσβασης στον πίνακα πηγής πριν το truncate (αποτρέπει απώλεια δεδομένων προορισμού αν υπάρχει πρόβλημα δικαιωμάτων)
 - ✅ Mapping πινάκων με διαφορετικά ονόματα
 - ✅ Αναλυτικό logging με timestamps
 - ✅ Έγχρωμο console output
@@ -131,7 +132,7 @@ Table-cloner/
   | Μεγάλοι πίνακες (20+ columns ή TEXT/BLOB) | 500-1000 |
   | Πολύ μεγάλα δεδομένα (JSON, binary) | 100-500 |
   
-  **Γενικά ασφαλές**: 1000-2000 για τα περισσότερα σενάρια (default: 1000)
+**Γενικά ασφαλές**: 1000-2000 για τα περισσότερα σενάρια (default: 1000). Στο log εμφανίζεται επίσης heuristic εκτίμηση για το current batch size και ένα προτεινόμενο εύρος τιμών, με βάση το συνολικό estimated data size και το μέσο μέγεθος γραμμής.
 
 - `TimeoutSeconds`: Χρονικό όριο για κάθε query σε δευτερόλεπτα (default: 300)
 - `LogFile`: Φάκελος για αποθήκευση των log files (default: `.\logs`)
@@ -180,6 +181,7 @@ table-cloner_YYYYMMDD_HHMMSS.log
 - Timestamp για κάθε ενέργεια
 - Level (INFO, SUCCESS, WARNING, ERROR)
 - Λεπτομερή αναφορά για κάθε πίνακα
+- Estimated data size, average row size, current batch payload και προτεινόμενο εύρος `BatchSize` (heuristic)
 - Σύνοψη με επιτυχίες/αποτυχίες
 - Stack trace σε περίπτωση critical errors
 
@@ -223,6 +225,7 @@ table-cloner_YYYYMMDD_HHMMSS.log
 - Το `BatchSize: 1000` είναι καλή αφετηρία
 - Για πολύ μεγάλους πίνακες (>1M rows), δοκίμασε `BatchSize: 5000-10000`
 - Για πίνακες με πολλές στήλες ή μεγάλα data types, μείωσε το BatchSize
+- Χρησιμοποίησε και το log output (`Current batch size` / `Recommended batch size`) για να κάνεις fine-tuning ανά πίνακα
 
 ## Troubleshooting
 

@@ -186,6 +186,59 @@ function Get-DataTableSizeEstimate {
     return $totalBytes
 }
 
+# Μορφοποίηση μεγέθους bytes για πιο καθαρά logs
+function Format-ByteSize {
+    param([double]$Bytes)
+
+    if ($Bytes -ge 1GB) { return "{0:N2} GB" -f ($Bytes / 1GB) }
+    if ($Bytes -ge 1MB) { return "{0:N2} MB" -f ($Bytes / 1MB) }
+    if ($Bytes -ge 1KB) { return "{0:N2} KB" -f ($Bytes / 1KB) }
+
+    return "{0:N0} B" -f $Bytes
+}
+
+# Υπολογίζει ένα προτεινόμενο εύρος BatchSize με βάση το μέσο μέγεθος γραμμής
+function Get-BatchSizeRecommendation {
+    param(
+        [long]$TotalBytes,
+        [int]$TotalRows,
+        [int]$CurrentBatchSize,
+        [int]$ColumnCount
+    )
+
+    if ($TotalRows -le 0) {
+        return $null
+    }
+
+    [double]$avgRowBytes = [Math]::Max(($TotalBytes / [double]$TotalRows), 1)
+    [long]$targetMinBatchBytes = 1MB
+    [long]$targetMaxBatchBytes = 8MB
+
+    $maxRowsByColumnCount = switch ($ColumnCount) {
+        { $_ -le 10 } { 15000; break }
+        { $_ -le 20 } { 10000; break }
+        { $_ -le 40 } { 5000; break }
+        default { 2000 }
+    }
+
+    $recommendedMinRows = [int][Math]::Ceiling($targetMinBatchBytes / $avgRowBytes)
+    $recommendedMaxRows = [int][Math]::Floor($targetMaxBatchBytes / $avgRowBytes)
+
+    $recommendedMinRows = [Math]::Min($recommendedMinRows, $maxRowsByColumnCount)
+    $recommendedMinRows = [Math]::Max(1, [Math]::Min($recommendedMinRows, $TotalRows))
+    $recommendedMaxRows = [Math]::Min($recommendedMaxRows, $maxRowsByColumnCount)
+    $recommendedMaxRows = [Math]::Max($recommendedMinRows, [Math]::Min($recommendedMaxRows, $TotalRows))
+
+    return [pscustomobject]@{
+        AverageRowBytes = [long][Math]::Round($avgRowBytes)
+        CurrentBatchBytes = [long][Math]::Round([Math]::Min($CurrentBatchSize, $TotalRows) * $avgRowBytes)
+        RecommendedMinRows = $recommendedMinRows
+        RecommendedMaxRows = $recommendedMaxRows
+        TargetMinBatchBytes = $targetMinBatchBytes
+        TargetMaxBatchBytes = $targetMaxBatchBytes
+    }
+}
+
 # Truncate πίνακα (πάντα MySQL destination)
 function Clear-DestinationTable {
     param(
@@ -224,27 +277,38 @@ function Copy-TableData {
         
         $totalRows = $sourceData.Rows.Count
         Write-Log "Found $totalRows rows to copy"
+
+        # Δημιουργία λίστας με τα ονόματα των στηλών
+        $columns = @()
+        foreach ($column in $sourceData.Columns) {
+            $columns += $column.ColumnName
+        }
+        $colCount = $columns.Count
         
         if ($totalRows -gt 0) {
             $dataBytes = Get-DataTableSizeEstimate -DataTable $sourceData
-            $dataSizeStr = if ($dataBytes -ge 1MB) { "{0:N2} MB" -f ($dataBytes / 1MB) } else { "{0:N2} KB" -f ($dataBytes / 1KB) }
+            $dataSizeStr = Format-ByteSize -Bytes $dataBytes
             Write-Log "Estimated data size: $dataSizeStr"
+
+            $batchRecommendation = Get-BatchSizeRecommendation -TotalBytes $dataBytes -TotalRows $totalRows -CurrentBatchSize $BatchSize -ColumnCount $colCount
+            if ($batchRecommendation) {
+                $currentBatchRows = [Math]::Min($BatchSize, $totalRows)
+                $currentBatchSizeStr = Format-ByteSize -Bytes $batchRecommendation.CurrentBatchBytes
+                $averageRowSizeStr = Format-ByteSize -Bytes $batchRecommendation.AverageRowBytes
+                $targetBatchRangeStr = "$(Format-ByteSize -Bytes $batchRecommendation.TargetMinBatchBytes)-$(Format-ByteSize -Bytes $batchRecommendation.TargetMaxBatchBytes)"
+
+                Write-Log "Current batch size: $($currentBatchRows.ToString('N0')) rows (~$currentBatchSizeStr per batch, avg row size ~$averageRowSizeStr)"
+                Write-Log "Recommended batch size (heuristic): $($batchRecommendation.RecommendedMinRows.ToString('N0'))-$($batchRecommendation.RecommendedMaxRows.ToString('N0')) rows (target payload ~$targetBatchRangeStr)"
+            }
         }
         
         if ($totalRows -eq 0) {
             Write-Log "No data to copy" -Level WARNING
             return $true
         }
-        
-        # Δημιουργία λίστας με τα ονόματα των στηλών
-        $columns = @()
-        foreach ($column in $sourceData.Columns) {
-            $columns += $column.ColumnName
-        }
-        
+
         # MySQL destination: χρήση backtick quoting
         $columnList = ($columns | ForEach-Object { "``$_``" }) -join ", "
-        $colCount = $columns.Count
         
         # Αντιγραφή δεδομένων σε batches — ένα multi-row INSERT ανά batch
         $copiedRows = 0
