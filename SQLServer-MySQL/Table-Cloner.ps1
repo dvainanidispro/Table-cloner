@@ -158,6 +158,34 @@ function Invoke-DatabaseNonQuery {
     return $command.ExecuteNonQuery()
 }
 
+# Εκτίμηση μεγέθους δεδομένων ενός DataTable (σε bytes)
+function Get-DataTableSizeEstimate {
+    param([System.Data.DataTable]$DataTable)
+    
+    [long]$totalBytes = 0
+    foreach ($row in $DataTable.Rows) {
+        foreach ($col in $DataTable.Columns) {
+            $value = $row[$col]
+            if ([DBNull]::Value.Equals($value) -or $null -eq $value) { continue }
+            switch ($value.GetType().Name) {
+                'String'   { $totalBytes += [System.Text.Encoding]::UTF8.GetByteCount($value) }
+                'Byte[]'   { $totalBytes += $value.Length }
+                'Int16'    { $totalBytes += 2 }
+                'Int32'    { $totalBytes += 4 }
+                'Int64'    { $totalBytes += 8 }
+                'Single'   { $totalBytes += 4 }
+                'Double'   { $totalBytes += 8 }
+                'Decimal'  { $totalBytes += 16 }
+                'Boolean'  { $totalBytes += 1 }
+                'DateTime' { $totalBytes += 8 }
+                'Byte'     { $totalBytes += 1 }
+                default    { $totalBytes += 8 }
+            }
+        }
+    }
+    return $totalBytes
+}
+
 # Truncate πίνακα (πάντα MySQL destination)
 function Clear-DestinationTable {
     param(
@@ -196,6 +224,12 @@ function Copy-TableData {
         
         $totalRows = $sourceData.Rows.Count
         Write-Log "Found $totalRows rows to copy"
+        
+        if ($totalRows -gt 0) {
+            $dataBytes = Get-DataTableSizeEstimate -DataTable $sourceData
+            $dataSizeStr = if ($dataBytes -ge 1MB) { "{0:N2} MB" -f ($dataBytes / 1MB) } else { "{0:N2} KB" -f ($dataBytes / 1KB) }
+            Write-Log "Estimated data size: $dataSizeStr"
+        }
         
         if ($totalRows -eq 0) {
             Write-Log "No data to copy" -Level WARNING
