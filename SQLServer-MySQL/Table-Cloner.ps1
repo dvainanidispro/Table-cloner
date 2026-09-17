@@ -5,26 +5,39 @@
     Αντιγράφει δεδομένα από πίνακες μιας βάσης δεδομένων σε άλλη.
     
 .DESCRIPTION
-    Το script διαβάζει τις ρυθμίσεις από το env.json και αντιγράφει δεδομένα
+    Το script διαβάζει τις ρυθμίσεις από αρχείο JSON (προεπιλογή: env.json) και αντιγράφει δεδομένα
     από πίνακες/views της βάσης προέλευσης στη βάση προορισμού.
     Υποστηρίζει SQL Server (πηγή) και MySQL (προορισμός).
     Ο SQL Server μπορεί να χρησιμοποιεί Windows Authentication (χωρίς username/password).
     
 .PARAMETER ConfigPath
-    Η διαδρομή του αρχείου env.json. Default: .\env.json
+    Το όνομα του αρχείου JSON στον ίδιο φάκελο με το script. Default: env.json
+
+.EXAMPLE
+    .\Table-Cloner.ps1 transfers.json
+
+.EXAMPLE
+    .\Table-Cloner.ps1 -ConfigPath transfers.json
 #>
 
 param(
-    [string]$ConfigPath = ".\env.json"
+    [Parameter(Position = 0)]
+    [ValidateScript({
+        if ([string]::IsNullOrWhiteSpace($_) -or
+            $_.IndexOfAny([System.IO.Path]::GetInvalidFileNameChars()) -ge 0 -or
+            [System.IO.Path]::GetExtension($_) -ine '.json') {
+            throw "Specify a JSON filename only (for example, transfers.json), without a path."
+        }
+        $true
+    })]
+    [string]$ConfigPath = "env.json"
 )
 
 # Πάντα δουλεύουμε paths relative στο folder του script (όχι στο current $PWD)
 $scriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 
-# Αν δοθεί σχετικό path για config, το θεωρούμε relative στο folder του script
-if (-not [System.IO.Path]::IsPathRooted($ConfigPath)) {
-    $ConfigPath = Join-Path $scriptRoot $ConfigPath
-}
+# Το αρχείο JSON βρίσκεται πάντα στον ίδιο φάκελο με το script
+$ConfigPath = Join-Path $scriptRoot $ConfigPath
 
 #region Helper Functions
 
@@ -385,6 +398,7 @@ try {
     # Διάβασμα configuration
     Write-Host "`nLoading configuration from $ConfigPath..." -ForegroundColor Cyan
     $config = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
+    $validateOnly = $config.Settings.ValidateOnly -eq $true
     
     # Δημιουργία log directory
     $logDirRaw = [string]$config.Settings.LogFile
@@ -409,7 +423,11 @@ try {
     
     # Δημιουργία log file με timestamp
     $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-    $script:logFilePath = Join-Path $logDir "table-cloner_$timestamp.log"
+    $logPrefix = 'table-cloner'
+    if ($PSBoundParameters.ContainsKey('ConfigPath')) {
+        $logPrefix += '_' + [System.IO.Path]::GetFileNameWithoutExtension($ConfigPath)
+    }
+    $script:logFilePath = Join-Path $logDir "${logPrefix}_$timestamp.log"
     
     Write-Log "=== Table Cloner Script Started ==="
     Write-Log "Configuration loaded from: $ConfigPath"
@@ -418,7 +436,13 @@ try {
     $authMode = if ([string]::IsNullOrWhiteSpace($config.DatabaseFrom.username)) { "Windows Auth" } else { "SQL Server Auth" }
     Write-Log "Source: $($config.DatabaseFrom.type) - $($config.DatabaseFrom.host)/$($config.DatabaseFrom.database) ($authMode)"
     Write-Log "Destination: $($config.DatabaseTo.type) - $($config.DatabaseTo.host):$($config.DatabaseTo.port)/$($config.DatabaseTo.database)"
-    Write-Log "Tables to copy: $($config.TableMappings.Count)"
+    if ($validateOnly) {
+        Write-Log "ValidateOnly enabled: checking connections and source read access; TRUNCATE and copying are skipped."
+        Write-Log "Tables to validate: $($config.TableMappings.Count)"
+    }
+    else {
+        Write-Log "Tables to copy: $($config.TableMappings.Count)"
+    }
     
     # Φόρτωση MySQL driver (για τον destination)
     Write-Log "Loading MySQL driver..."
@@ -530,6 +554,12 @@ try {
             Write-Log "Preflight check FAILED for '$sourceTable': $($_.Exception.Message)" -Level ERROR
             Write-Log "Skipping '$sourceTable' -> '$destTable' (destination untouched)" -Level WARNING
             $failCount++
+            continue
+        }
+
+        if ($validateOnly) {
+            Write-Log "Table '$sourceTable' -> '$destTable': VALIDATED (copy skipped)" -Level SUCCESS
+            $successCount++
             continue
         }
 

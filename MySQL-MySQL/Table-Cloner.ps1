@@ -5,17 +5,38 @@
     Αντιγράφει δεδομένα από πίνακες μιας βάσης δεδομένων σε άλλη.
     
 .DESCRIPTION
-    Το script διαβάζει τις ρυθμίσεις από το env.json και αντιγράφει δεδομένα
+    Το script διαβάζει τις ρυθμίσεις από αρχείο JSON (προεπιλογή: env.json) και αντιγράφει δεδομένα
     από πίνακες/views της βάσης προέλευσης στη βάση προορισμού.
     Υποστηρίζει μόνο MySQL βάσεις.
     
 .PARAMETER ConfigPath
-    Η διαδρομή του αρχείου env.json. Default: .\env.json
+    Το όνομα του αρχείου JSON στον ίδιο φάκελο με το script. Default: env.json
+
+.EXAMPLE
+    .\Table-Cloner.ps1 transfers.json
+
+.EXAMPLE
+    .\Table-Cloner.ps1 -ConfigPath transfers.json
 #>
 
 param(
-    [string]$ConfigPath = ".\env.json"
+    [Parameter(Position = 0)]
+    [ValidateScript({
+        if ([string]::IsNullOrWhiteSpace($_) -or
+            $_.IndexOfAny([System.IO.Path]::GetInvalidFileNameChars()) -ge 0 -or
+            [System.IO.Path]::GetExtension($_) -ine '.json') {
+            throw "Specify a JSON filename only (for example, transfers.json), without a path."
+        }
+        $true
+    })]
+    [string]$ConfigPath = "env.json"
 )
+
+# Πάντα δουλεύουμε paths relative στο folder του script (όχι στο current $PWD)
+$scriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+
+# Το αρχείο JSON βρίσκεται πάντα στον ίδιο φάκελο με το script
+$ConfigPath = Join-Path $scriptRoot $ConfigPath
 
 #region Helper Functions
 
@@ -337,22 +358,37 @@ try {
     # Διάβασμα configuration
     Write-Host "`nLoading configuration from $ConfigPath..." -ForegroundColor Cyan
     $config = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
+    $validateOnly = $config.Settings.ValidateOnly -eq $true
     
     # Δημιουργία log directory
-    $logDir = $config.Settings.LogFile
+    $logDir = [string]$config.Settings.LogFile
+    if ([string]::IsNullOrWhiteSpace($logDir)) { $logDir = '.\logs' }
+    if (-not [System.IO.Path]::IsPathRooted($logDir)) {
+        $logDir = Join-Path $scriptRoot $logDir
+    }
     if (-not (Test-Path $logDir)) {
         New-Item -Path $logDir -ItemType Directory -Force | Out-Null
     }
     
     # Δημιουργία log file με timestamp
     $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-    $script:logFilePath = Join-Path $logDir "table-cloner_$timestamp.log"
+    $logPrefix = 'table-cloner'
+    if ($PSBoundParameters.ContainsKey('ConfigPath')) {
+        $logPrefix += '_' + [System.IO.Path]::GetFileNameWithoutExtension($ConfigPath)
+    }
+    $script:logFilePath = Join-Path $logDir "${logPrefix}_$timestamp.log"
     
     Write-Log "=== Table Cloner Script Started ==="
     Write-Log "Configuration loaded from: $ConfigPath"
     Write-Log "Source: $($config.DatabaseFrom.type) - $($config.DatabaseFrom.host):$($config.DatabaseFrom.port)/$($config.DatabaseFrom.database)"
     Write-Log "Destination: $($config.DatabaseTo.type) - $($config.DatabaseTo.host):$($config.DatabaseTo.port)/$($config.DatabaseTo.database)"
-    Write-Log "Tables to copy: $($config.TableMappings.Count)"
+    if ($validateOnly) {
+        Write-Log "ValidateOnly enabled: checking connections and source read access; TRUNCATE and copying are skipped."
+        Write-Log "Tables to validate: $($config.TableMappings.Count)"
+    }
+    else {
+        Write-Log "Tables to copy: $($config.TableMappings.Count)"
+    }
     
     # Φόρτωση MySQL driver
     Write-Log "Loading MySQL driver..."
@@ -363,15 +399,15 @@ try {
             
             # Αν ζητάει System.Threading.Tasks.Extensions, redirect στην έκδοση που έχουμε
             if ($e.Name -like "System.Threading.Tasks.Extensions*") {
-                if (Test-Path "lib\System.Threading.Tasks.Extensions.dll") {
-                    $tasksExtPath = Resolve-Path "lib\System.Threading.Tasks.Extensions.dll"
+                if (Test-Path (Join-Path $scriptRoot "lib\System.Threading.Tasks.Extensions.dll")) {
+                    $tasksExtPath = Resolve-Path (Join-Path $scriptRoot "lib\System.Threading.Tasks.Extensions.dll")
                     return [System.Reflection.Assembly]::LoadFile($tasksExtPath.Path)
                 }
             }
             # Αν ζητάει System.Runtime.CompilerServices.Unsafe, redirect στην έκδοση που έχουμε
             if ($e.Name -like "System.Runtime.CompilerServices.Unsafe*") {
-                if (Test-Path "lib\System.Runtime.CompilerServices.Unsafe.dll") {
-                    $unsafePath = Resolve-Path "lib\System.Runtime.CompilerServices.Unsafe.dll"
+                if (Test-Path (Join-Path $scriptRoot "lib\System.Runtime.CompilerServices.Unsafe.dll")) {
+                    $unsafePath = Resolve-Path (Join-Path $scriptRoot "lib\System.Runtime.CompilerServices.Unsafe.dll")
                     return [System.Reflection.Assembly]::LoadFile($unsafePath.Path)
                 }
             }
@@ -381,26 +417,26 @@ try {
         [System.AppDomain]::CurrentDomain.add_AssemblyResolve($onAssemblyResolve)
         
         # Φόρτωση dependencies πρώτα με LoadFile για να αποφύγουμε dependency issues
-        if (Test-Path "lib\System.Runtime.CompilerServices.Unsafe.dll") {
-            [System.Reflection.Assembly]::LoadFile((Resolve-Path "lib\System.Runtime.CompilerServices.Unsafe.dll").Path) | Out-Null
+        if (Test-Path (Join-Path $scriptRoot "lib\System.Runtime.CompilerServices.Unsafe.dll")) {
+            [System.Reflection.Assembly]::LoadFile((Resolve-Path (Join-Path $scriptRoot "lib\System.Runtime.CompilerServices.Unsafe.dll")).Path) | Out-Null
         }
-        if (Test-Path "lib\System.Threading.Tasks.Extensions.dll") {
-            [System.Reflection.Assembly]::LoadFile((Resolve-Path "lib\System.Threading.Tasks.Extensions.dll").Path) | Out-Null
+        if (Test-Path (Join-Path $scriptRoot "lib\System.Threading.Tasks.Extensions.dll")) {
+            [System.Reflection.Assembly]::LoadFile((Resolve-Path (Join-Path $scriptRoot "lib\System.Threading.Tasks.Extensions.dll")).Path) | Out-Null
         }
-        if (Test-Path "lib\System.Memory.dll") {
-            [System.Reflection.Assembly]::LoadFile((Resolve-Path "lib\System.Memory.dll").Path) | Out-Null
+        if (Test-Path (Join-Path $scriptRoot "lib\System.Memory.dll")) {
+            [System.Reflection.Assembly]::LoadFile((Resolve-Path (Join-Path $scriptRoot "lib\System.Memory.dll")).Path) | Out-Null
         }
-        if (Test-Path "lib\Google.Protobuf.dll") {
-            [System.Reflection.Assembly]::LoadFile((Resolve-Path "lib\Google.Protobuf.dll").Path) | Out-Null
+        if (Test-Path (Join-Path $scriptRoot "lib\Google.Protobuf.dll")) {
+            [System.Reflection.Assembly]::LoadFile((Resolve-Path (Join-Path $scriptRoot "lib\Google.Protobuf.dll")).Path) | Out-Null
         }
-        if (Test-Path "lib\K4os.Compression.LZ4.Streams.dll") {
-            [System.Reflection.Assembly]::LoadFile((Resolve-Path "lib\K4os.Compression.LZ4.Streams.dll").Path) | Out-Null
+        if (Test-Path (Join-Path $scriptRoot "lib\K4os.Compression.LZ4.Streams.dll")) {
+            [System.Reflection.Assembly]::LoadFile((Resolve-Path (Join-Path $scriptRoot "lib\K4os.Compression.LZ4.Streams.dll")).Path) | Out-Null
         }
-        if (Test-Path "lib\BouncyCastle.Cryptography.dll") {
-            [System.Reflection.Assembly]::LoadFile((Resolve-Path "lib\BouncyCastle.Cryptography.dll").Path) | Out-Null
+        if (Test-Path (Join-Path $scriptRoot "lib\BouncyCastle.Cryptography.dll")) {
+            [System.Reflection.Assembly]::LoadFile((Resolve-Path (Join-Path $scriptRoot "lib\BouncyCastle.Cryptography.dll")).Path) | Out-Null
         }
         # Τέλος φόρτωση του MySQL.Data
-        [System.Reflection.Assembly]::LoadFile((Resolve-Path "lib\MySql.Data.dll").Path) | Out-Null
+        [System.Reflection.Assembly]::LoadFile((Resolve-Path (Join-Path $scriptRoot "lib\MySql.Data.dll")).Path) | Out-Null
     }
     catch {
         Write-Log "Failed to load MySQL.Data.dll. Please ensure the driver is available." -Level ERROR
@@ -451,6 +487,12 @@ try {
             Write-Log "Preflight check FAILED for '$sourceTable': $($_.Exception.Message)" -Level ERROR
             Write-Log "Skipping '$sourceTable' -> '$destTable' (destination untouched)" -Level WARNING
             $failCount++
+            continue
+        }
+
+        if ($validateOnly) {
+            Write-Log "Table '$sourceTable' -> '$destTable': VALIDATED (copy skipped)" -Level SUCCESS
+            $successCount++
             continue
         }
 

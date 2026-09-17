@@ -14,6 +14,8 @@ PowerShell script για αντιγραφή δεδομένων από πίνακ
 - ✅ Truncate πίνακα προορισμού πριν την αντιγραφή (προαιρετικό)
 - ✅ Preflight έλεγχος πρόσβασης στον πίνακα πηγής πριν το truncate (αποτρέπει απώλεια δεδομένων προορισμού αν υπάρχει πρόβλημα δικαιωμάτων)
 - ✅ Mapping πινάκων με διαφορετικά ονόματα
+- ✅ `ValidateOnly` για έλεγχο σύνδεσης σε πηγή και προορισμό και πρόσβασης ανάγνωσης στην πηγή, χωρίς αντιγραφή
+- ✅ Επιλογή αρχείου JSON με παράμετρο (προεπιλογή: `env.json`)
 - ✅ Αναλυτικό logging με timestamps
 - ✅ Έγχρωμο console output
 - ✅ Error handling και summary αναφορά
@@ -82,7 +84,7 @@ SQLServer-MySQL/
 
 ## Ρύθμιση (Configuration)
 
-Επεξεργάσου το αρχείο `env.json` με τα στοιχεία των βάσεων σου:
+Επεξεργάσου το αρχείο `env.json` ή άλλο αρχείο `.json` στον ίδιο φάκελο με το script, με τα στοιχεία των βάσεων σου:
 
 ```json
 {
@@ -103,6 +105,7 @@ SQLServer-MySQL/
         "database": "destination_database"
     },
     "Settings": {
+        "ValidateOnly": false,
         "BatchSize": 1000,
         "TimeoutSeconds": 300,
         "LogFile": ".\\logs",
@@ -143,6 +146,10 @@ SQLServer-MySQL/
 - `database`: Όνομα της βάσης δεδομένων MySQL
 
 #### Settings
+- `ValidateOnly`: Προαιρετικό boolean (`true` ή `false`, χωρίς εισαγωγικά).
+  - `true`: Ελέγχει τη σύνδεση και στις δύο βάσεις: στον SQL Server (πηγή) και στη MySQL (προορισμός), με τα στοιχεία του JSON. Στην πηγή ελέγχει επιπλέον την πρόσβαση ανάγνωσης για κάθε πίνακα/view. Καταγράφει τα αποτελέσματα, χωρίς `TRUNCATE` ή αντιγραφή, ακόμη και αν το `TruncateBeforeInsert` είναι `true`.
+  - `false` ή απουσία της ρύθμισης: Εκτελεί κανονικά την αντιγραφή.
+  - Στον προορισμό επιβεβαιώνει ότι επιτρέπεται η σύνδεση στη συγκεκριμένη βάση, όχι ότι υπάρχουν δικαιώματα `INSERT` ή `TRUNCATE` στους πίνακες. Αυτά ελέγχονται στην πράξη κατά την κανονική αντιγραφή.
 - `BatchSize`: Πόσες εγγραφές να αντιγράφονται σε κάθε transaction. Προτεινόμενες τιμές:
   
   | Σενάριο | BatchSize |
@@ -176,19 +183,69 @@ SQLServer-MySQL/
 .\Table-Cloner.ps1
 ```
 
-Το script θα διαβάσει το `env.json` από τον τρέχοντα φάκελο.
+Χωρίς παράμετρο, το script διαβάζει το `env.json` από **τον φάκελο του script**, ανεξάρτητα από τον τρέχοντα φάκελο εκτέλεσης.
 
-### Εκτέλεση με Custom Configuration Path
+### Εκτέλεση με διαφορετικό αρχείο JSON
 
 ```powershell
-.\Table-Cloner.ps1 -ConfigPath "C:\path\to\custom-config.json"
+.\Table-Cloner.ps1 transfers.json
 ```
+
+Ή με ονομαστική παράμετρο:
+
+```powershell
+.\Table-Cloner.ps1 -ConfigPath "transfers.json"
+```
+
+Το `transfers.json` πρέπει να βρίσκεται στον ίδιο φάκελο με το `Table-Cloner.ps1`. Η παράμετρος δέχεται μόνο όνομα αρχείου `.json`, όχι διαδρομή. Για όνομα με κενά, χρησιμοποίησε εισαγωγικά, π.χ. `"night transfers.json"`.
+
+### Εκτέλεση με Run with PowerShell
+
+Κάνε δεξί κλικ στο `Table-Cloner.ps1` και επίλεξε **Run with PowerShell**. Χρησιμοποιείται αυτόματα το `env.json` από τον φάκελο του script, επειδή δεν δίνεται παράμετρος.
+
+### Έλεγχος χωρίς αντιγραφή
+
+Στο `Settings` του JSON που θα χρησιμοποιήσεις, όρισε:
+
+```json
+"ValidateOnly": true
+```
+
+Εκτέλεσε το script με οποιονδήποτε από τους παραπάνω τρόπους. Θα ελεγχθούν η σύνδεση στην πηγή, η σύνδεση στον προορισμό και η πρόσβαση ανάγνωσης στους πίνακες/views της πηγής, με αποτελέσματα στην κονσόλα και στο log. Δεν θα εκτελεστεί `INSERT` ή `TRUNCATE` στον προορισμό ούτε θα ελεγχθούν τα αντίστοιχα δικαιώματα. Για κανονική αντιγραφή, άλλαξε την τιμή σε `false` ή αφαίρεσε τη ρύθμιση.
 
 ### Εκτέλεση αν υπάρχει Execution Policy πρόβλημα
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File ".\Table-Cloner.ps1"
 ```
+
+Με διαφορετικό JSON:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File ".\Table-Cloner.ps1" -ConfigPath "transfers.json"
+```
+
+### Εκτέλεση από το Windows Task Scheduler
+
+Δημιούργησε ένα task και όρισε την επιθυμητή ώρα στην καρτέλα **Triggers**. Στην καρτέλα **Actions**, επίλεξε **New → Start a program** και συμπλήρωσε, για παράδειγμα:
+
+| Πεδίο | Τιμή |
+|-------|------|
+| **Program/script** | `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe` |
+| **Add arguments (optional)** | `-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "C:\Transfers\SQLServer-MySQL\Table-Cloner.ps1" -ConfigPath "transfers.json"` |
+| **Start in (optional)** | `C:\Transfers\SQLServer-MySQL` |
+
+Αντικατάστησε τη διαδρομή του παραδείγματος με τον δικό σου φάκελο. Στο **Start in** βάλε τον φάκελο χωρίς εισαγωγικά. Το JSON αναζητείται πάντα δίπλα στο script, ακόμη και αν το **Start in** μείνει κενό.
+
+Για το προεπιλεγμένο `env.json`, τα **Add arguments** είναι:
+
+```text
+-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "C:\Transfers\SQLServer-MySQL\Table-Cloner.ps1"
+```
+
+Για διαφορετικές μεταφορές σε διαφορετικές ώρες, δημιούργησε ξεχωριστά tasks με το ίδιο script και διαφορετικό `-ConfigPath`, π.χ. `"morning.json"` και `"night.json"`. Κάθε JSON περιέχει τις δικές του ρυθμίσεις και `TableMappings`.
+
+Αν χρησιμοποιείς Windows Authentication στον SQL Server, η σύνδεση γίνεται με τον Windows λογαριασμό που έχει οριστεί για την εκτέλεση του task στην καρτέλα **General**. Ο λογαριασμός αυτός πρέπει να έχει πρόσβαση στην πηγή και στα αρχεία του script.
 
 ## Logging
 
@@ -198,11 +255,22 @@ powershell -ExecutionPolicy Bypass -File ".\Table-Cloner.ps1"
 Τα log files αποθηκεύονται στον φάκελο που ορίζεται στο `Settings.LogFile` (default: `.\logs`)
 
 ### Μορφή Log Filename
+
+Χωρίς παράμετρο ή με **Run with PowerShell**, χρησιμοποιείται το `env.json` και το όνομα του log παραμένει:
+
 ```
 table-cloner_YYYYMMDD_HHMMSS.log
 ```
 
-Παράδειγμα: `table-cloner_20260227_143025.log`
+Όταν δίνεται ρητά όνομα JSON ως παράμετρος, προστίθεται στο όνομα του log χωρίς την επέκταση `.json`. Αυτό ισχύει και όταν δίνεται ρητά το `env.json`.
+
+| Εκτέλεση | Παράδειγμα ονόματος log |
+|----------|------------------------|
+| `.\Table-Cloner.ps1` ή **Run with PowerShell** | `table-cloner_20260417_133541.log` |
+| `.\Table-Cloner.ps1 new-transfer.json` | `table-cloner_new-transfer_20260417_133541.log` |
+| `.\Table-Cloner.ps1 -ConfigPath env.json` | `table-cloner_env_20260417_133541.log` |
+
+Η ίδια ονομασία εφαρμόζεται και στην εκτέλεση μέσω Task Scheduler και στη λειτουργία `ValidateOnly`. Ο φάκελος εξακολουθεί να ορίζεται από το `Settings.LogFile` του επιλεγμένου JSON.
 
 ### Περιεχόμενο Log
 
