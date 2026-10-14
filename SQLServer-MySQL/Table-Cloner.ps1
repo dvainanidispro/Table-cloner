@@ -37,7 +37,7 @@ param(
 $scriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 
 # Το αρχείο JSON βρίσκεται πάντα στον ίδιο φάκελο με το script
-$ConfigPath = Join-Path $scriptRoot $ConfigPath
+$resolvedConfigPath = Join-Path $scriptRoot $ConfigPath
 
 #region Helper Functions
 
@@ -391,13 +391,13 @@ function Copy-TableData {
 
 try {
     # Έλεγχος ύπαρξης config file
-    if (-not (Test-Path $ConfigPath)) {
-        throw "Configuration file not found: $ConfigPath"
+    if (-not (Test-Path $resolvedConfigPath)) {
+        throw "Configuration file not found: $resolvedConfigPath"
     }
     
     # Διάβασμα configuration
-    Write-Host "`nLoading configuration from $ConfigPath..." -ForegroundColor Cyan
-    $config = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
+    Write-Host "`nLoading configuration from $resolvedConfigPath..." -ForegroundColor Cyan
+    $config = Get-Content -Path $resolvedConfigPath -Raw | ConvertFrom-Json
     $validateOnly = $config.Settings.ValidateOnly -eq $true
     
     # Δημιουργία log directory
@@ -430,7 +430,7 @@ try {
     $script:logFilePath = Join-Path $logDir "${logPrefix}_$timestamp.log"
     
     Write-Log "=== Table Cloner Script Started ==="
-    Write-Log "Configuration loaded from: $ConfigPath"
+    Write-Log "Configuration loaded from: $resolvedConfigPath"
     
     # Εμφάνιση source info (SQL Server)
     $authMode = if ([string]::IsNullOrWhiteSpace($config.DatabaseFrom.username)) { "Windows Auth" } else { "SQL Server Auth" }
